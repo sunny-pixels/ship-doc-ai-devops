@@ -198,6 +198,167 @@ yourself:
   - See [`render.yaml`](render.yaml) for the "bump plan, add a disk block"
     path back to persistence.
 
+## DevOps Setup
+
+A self-hosted deployment of the same app, built for running on a single
+Ubuntu Server 24.04 VM (VirtualBox). Everything is free and local: Docker for
+runtime, Terraform for infrastructure, LocalStack in place of AWS, and GitHub
+Actions with a self-hosted runner for CI/CD. The Vercel/Render setup above is
+unchanged.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    Dev[Developer] -->|pull request| GH[GitHub]
+    GH -->|pull_request| CI["CI (GitHub-hosted)<br/>ruff + pytest, biome,<br/>image build + Trivy"]
+    GH -.->|"push to main<br/>(runner polls outbound)"| Runner
+
+    Browser -->|HTTPS :443| Nginx
+
+    subgraph VM["Ubuntu 24.04 VM (VirtualBox) · UFW 22/80/443 · fail2ban"]
+        Runner["GitHub self-hosted runner<br/>docker build :sha<br/>terraform apply"]
+        Cron["cron<br/>backup.sh daily<br/>healthcheck.sh every 5 min"]
+
+        subgraph Docker["Docker network ultradoc_net (terraform/docker)"]
+            Nginx["nginx<br/>TLS, gzip, rate limit"]
+            Web["web<br/>Next.js :3000"]
+            API["api<br/>FastAPI :8000"]
+            Vol[("ultradoc_data<br/>uploads + Chroma")]
+            LS["LocalStack :4566<br/>S3 + IAM<br/>(terraform/aws-local)"]
+        end
+    end
+
+    Nginx -->|/| Web
+    Nginx -->|"/api/* (prefix stripped)"| API
+    API --> Vol
+    API -->|chat completions| Groq[Groq API]
+    Runner -->|apply| Docker
+    Cron -->|tar.gz| Vol
+    Cron -->|upload| LS
+```
+
+| Piece | Where | What it does |
+|---|---|---|
+| Hardened images | `apps/*/Dockerfile`, `.dockerignore` | Non-root users, `HEALTHCHECK`, models baked to `/app/models`, no `.env` in images |
+| Readiness probe | `GET /ready` | 200 only if the data dir is writable and Chroma opens (`/health` is liveness) |
+| Reverse proxy | `nginx/default.conf` | `/` → web, `/api/*` → api (prefix stripped), HTTP→HTTPS, gzip, 10 r/s rate limit, 10 MB body limit |
+| App infrastructure | `terraform/docker/` | kreuzwerker/docker: network, data volume, api/web/nginx/LocalStack containers |
+| AWS-style resources | `terraform/aws-local/` | hashicorp/aws → LocalStack: versioned, encrypted backup bucket with lifecycle rules; least-privilege IAM user |
+| Server setup | `scripts/server-setup.sh` | Deploy user, key-only SSH, UFW, fail2ban, Docker, Terraform, AWS CLI, swap, unattended upgrades |
+| Operations | `scripts/{backup,restore,healthcheck}.sh` | Volume backups to S3, restores, health reports (see [docs/RUNBOOK.md](docs/RUNBOOK.md)) |
+| CI/CD | `.github/workflows/{ci,deploy}.yml` | PR checks; deploy to the VM with automatic rollback |
+
+### CI/CD flow
+
+- **Pull request → `ci.yml`** (GitHub-hosted runners):
+  1. API: `ruff check` + `pytest` (`/health`, `/ready`).
+  2. Web: `biome check`.
+  3. Build both images and scan them with Trivy; any fixable CRITICAL CVE fails the PR.
+- **Push to `main` → `deploy.yml`** (self-hosted runner on the VM):
+  1. Build `ultradoc-api:<git-sha>` and `ultradoc-web:<git-sha>` on the VM (no registry needed).
+  2. `terraform apply -var image_tag=<git-sha>` replaces only containers whose image changed.
+  3. Health check through nginx (`/api/health` + `/api/ready`, 10 tries × 6 s).
+  4. Success: record the tag in `/opt/ultradoc/state/current_tag`, install `scripts/` for cron, prune old images (keeps current + previous).
+  5. Failure: `terraform apply` with the previous tag, re-check, and fail the job.
+- Secrets live only in GitHub Actions secrets (`LLM_API_KEY`) and reach Terraform as `TF_VAR_llm_api_key`.
+- Actions are pinned to commit SHAs.
+- The self-hosted runner only runs `deploy.yml` on pushes to `main`, never on PRs, so code from forks never executes on the VM.
+- Known limitation: there is one container per service, replaced in place. A failed release
+  means about 2–3 minutes of API downtime until the rollback finishes (tested by deploying an
+  image whose healthcheck never passes). Blue/green behind nginx would remove that.
+
+### Run the stack locally (Docker Compose)
+
+```bash
+scripts/gen-certs.sh
+docker compose up --build            # https://localhost (accept the self-signed cert)
+# Ports 80/443 busy? HTTP_PORT=8080 HTTPS_PORT=8443 docker compose up --build
+```
+
+### Bring it up on a fresh VM
+
+**On your PC:**
+1. Create a VirtualBox VM:
+   - Ubuntu Server 24.04 ISO, 2 vCPU, 4–6 GB RAM, 30 GB disk.
+   - Network: Bridged Adapter (or NAT with port forwards 2222→22, 443→443).
+   - In the installer, tick **Install OpenSSH server**.
+2. Copy your SSH key to the VM (PowerShell):
+   ```powershell
+   ssh-keygen -t ed25519            # once, if you have no key yet
+   type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <user>@<vm-ip> "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+   ```
+
+**On the VM**, as the user you created during install:
+
+```bash
+sudo apt-get update && sudo apt-get install -y git
+git clone https://github.com/<you>/ultradoc-ai.git && cd ultradoc-ai
+sudo scripts/server-setup.sh          # creates "deploy", hardens SSH (key-only from now on)
+```
+
+Then, as `deploy` (`ssh deploy@<vm-ip>`):
+
+```bash
+git clone https://github.com/<you>/ultradoc-ai.git ~/ultradoc-ai && cd ~/ultradoc-ai
+
+# 1. TLS cert covering the VM's IP
+CERT_DIR=/opt/ultradoc/certs scripts/gen-certs.sh <vm-ip>
+
+# 2. First build (later builds come from the deploy workflow)
+docker build -t ultradoc-api:manual apps/api
+docker build -t ultradoc-web:manual --build-arg NEXT_PUBLIC_API_BASE_URL=/api/ apps/web
+
+# 3. App + LocalStack containers
+cd terraform/docker
+terraform init -backend-config="path=/opt/ultradoc/state/docker.tfstate"
+read -rs TF_VAR_llm_api_key && export TF_VAR_llm_api_key      # paste the Groq key
+terraform apply -var image_tag=manual -var cert_dir=/opt/ultradoc/certs
+echo manual > /opt/ultradoc/state/current_tag
+
+# 4. Backup bucket + IAM user in LocalStack
+cd ../aws-local
+terraform init -backend-config="path=/opt/ultradoc/state/aws-local.tfstate"
+terraform apply
+
+# 5. Config for the ops scripts (holds the backup user's keys)
+install -m 600 ~/ultradoc-ai/scripts/ultradoc.env.example /opt/ultradoc/ultradoc.env
+sed -i "s|^AWS_ACCESS_KEY_ID=.*|AWS_ACCESS_KEY_ID=$(terraform output -raw backup_access_key_id)|; \
+        s|^AWS_SECRET_ACCESS_KEY=.*|AWS_SECRET_ACCESS_KEY=$(terraform output -raw backup_secret_access_key)|" \
+  /opt/ultradoc/ultradoc.env
+
+# 6. Ops scripts + cron
+cp -a ~/ultradoc-ai/scripts /opt/ultradoc/app/
+crontab ~/ultradoc-ai/scripts/crontab.example
+/opt/ultradoc/app/scripts/healthcheck.sh && /opt/ultradoc/app/scripts/backup.sh
+```
+
+Open `https://<vm-ip>` from your PC and accept the self-signed certificate.
+
+Cron entries (`scripts/crontab.example`):
+
+```cron
+2   2 * * *  /opt/ultradoc/app/scripts/backup.sh >> /opt/ultradoc/logs/backup.log 2>&1
+*/5 * * * *  /opt/ultradoc/app/scripts/healthcheck.sh > /dev/null 2>&1
+```
+
+### GitHub setup (secrets + self-hosted runner)
+
+1. **Secret:** repo → Settings → Secrets and variables → Actions → *New repository secret*:
+   `LLM_API_KEY` = your Groq key. Optional *variable* `LLM_MODEL` (default `openai/gpt-oss-120b`).
+2. **Runner:** repo → Settings → Actions → Runners → *New self-hosted runner* → Linux x64.
+   Run the download commands it shows on the VM as `deploy` (in `~/actions-runner`), then:
+   ```bash
+   ./config.sh --url https://github.com/<you>/ultradoc-ai --token <token-from-page> \
+     --name ultradoc-vm --labels ultradoc --unattended
+   sudo ./svc.sh install deploy && sudo ./svc.sh start
+   ```
+   The runner connects outbound to GitHub, so the VM needs no inbound port for it.
+3. Push to `main`, then watch the **Deploy** run under the Actions tab.
+
+Day-2 operations (app down, disk full, backup/restore, rollback, certificate
+renewal, logs) are in [docs/RUNBOOK.md](docs/RUNBOOK.md).
+
 ## API reference
 
 - All endpoints are root-level (no version prefix).
@@ -322,6 +483,8 @@ yourself:
   - The one endpoint that does *not* fall back to unscoped access when
     `X-Session-Id` is missing (see [Security](#security)).
 - `GET /health`: liveness probe.
+- `GET /ready`: readiness probe. 200 only when the data dir is writable and
+  the Chroma store opens; 503 with the failing check otherwise.
 
 ## Chunking strategy
 
@@ -717,7 +880,14 @@ apps/
   web/    Next.js frontend: see apps/web/src/features/doc-chat
 docs/
   architecture.drawio   Editable deployment-architecture diagram
+  RUNBOOK.md            Operations runbook (incidents, backups, rollback, logs)
 render.yaml             Render Blueprint (Docker backend, free tier)
+docker-compose.yml      Local stack behind nginx (https://localhost)
+nginx/                  Reverse proxy config (TLS, /api routing, rate limit)
+terraform/docker/       Docker provider: network, volume, api/web/nginx/LocalStack
+terraform/aws-local/    AWS provider on LocalStack: backup bucket + IAM user
+scripts/                VM setup, backup/restore, healthcheck, cert generation
+.github/workflows/      CI (pull requests) and deploy (push to main)
 mise.toml               Pinned toolchain + `mise run dev` (backend + frontend together)
 ```
 
@@ -725,7 +895,7 @@ mise.toml               Pinned toolchain + `mise run dev` (backend + frontend to
 
 ```bash
 # Backend gates
-cd apps/api && uv run ruff check . && uv run mypy app
+cd apps/api && uv run ruff check . && uv run mypy app && uv run pytest
 
 # Frontend gates
 cd apps/web && pnpm lint && pnpm type-check
