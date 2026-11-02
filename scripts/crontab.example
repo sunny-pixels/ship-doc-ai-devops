@@ -1,0 +1,8 @@
+# Install for the deploy user:  crontab -u deploy scripts/crontab.example
+# (or merge into an existing one with `crontab -e`)
+#
+# m   h  dom mon dow  command
+# Daily backup at 02:02 (off the 5-minute grid so it never overlaps a healthcheck).
+2     2  *   *   *    /opt/ultradoc/app/scripts/backup.sh >> /opt/ultradoc/logs/backup.log 2>&1
+# Healthcheck every 5 minutes; it appends its own report to /opt/ultradoc/logs/healthcheck.log.
+*/5   *  *   *   *    /opt/ultradoc/app/scripts/healthcheck.sh > /dev/null 2>&1
