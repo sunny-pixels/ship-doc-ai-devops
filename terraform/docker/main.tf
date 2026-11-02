@@ -150,3 +150,40 @@ resource "docker_container" "nginx" {
 
   depends_on = [docker_container.api, docker_container.web]
 }
+
+# ---- LocalStack ----
+# Stands in for AWS S3/IAM so backups have an S3-compatible target. Bound to
+# 127.0.0.1 only: backup.sh and terraform/aws-local reach it from the host.
+# Community edition keeps no state across restarts; re-apply terraform/aws-local.
+
+resource "docker_image" "localstack" {
+  count        = var.enable_localstack ? 1 : 0
+  name         = var.localstack_image
+  keep_locally = true
+}
+
+resource "docker_container" "localstack" {
+  count   = var.enable_localstack ? 1 : 0
+  name    = "${var.name_prefix}-localstack"
+  image   = docker_image.localstack[0].image_id
+  restart = "unless-stopped"
+
+  env = compact([
+    "SERVICES=s3,iam,sts",
+    var.localstack_auth_token != "" ? "LOCALSTACK_AUTH_TOKEN=${var.localstack_auth_token}" : "",
+  ])
+
+  ports {
+    internal = 4566
+    external = 4566
+    ip       = "127.0.0.1"
+  }
+
+  networks_advanced {
+    name    = docker_network.app.id
+    aliases = ["localstack"]
+  }
+
+  log_driver = "json-file"
+  log_opts   = local.log_opts
+}

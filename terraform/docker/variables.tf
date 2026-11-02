@@ -78,3 +78,24 @@ variable "cert_dir" {
   type        = string
   default     = null
 }
+
+# ---- LocalStack (AWS-style S3/IAM for backups) ----
+
+variable "enable_localstack" {
+  description = "Run a LocalStack container for the backup bucket (see terraform/aws-local)."
+  type        = bool
+  default     = true
+}
+
+variable "localstack_image" {
+  description = "LocalStack image. 4.14 is the last release that runs without an auth token."
+  type        = string
+  default     = "localstack/localstack:4.14"
+}
+
+variable "localstack_auth_token" {
+  description = "Only needed for LocalStack images newer than 4.14. Pass via TF_VAR_localstack_auth_token."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
