@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 
+// API_INTERNAL_URL (runtime) wins: behind a reverse proxy the public URL is
+// relative ("/api/"), which this server-side probe can't fetch.
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || "http://localhost:8000/";
+  process.env.API_INTERNAL_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.API_BASE_URL ||
+  "http://localhost:8000/";
 const PROBE_TIMEOUT_MS = 2000;
 
 export const dynamic = "force-dynamic";

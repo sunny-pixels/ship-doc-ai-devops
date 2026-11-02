@@ -22,3 +22,6 @@ data/
 
 .DS_Store
 .vercel
+
+# TLS material (generate with scripts/gen-certs.sh)
+nginx/certs/

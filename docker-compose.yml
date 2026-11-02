@@ -1,23 +1,54 @@
+# Local stack behind nginx: https://localhost
+#   scripts/gen-certs.sh && docker compose up --build
+# Only nginx publishes ports; web and api are reachable through it.
 services:
   api:
     build:
       context: ./apps/api
-    ports:
-      - "8000:8000"
     env_file:
       - ./apps/api/.env
+    environment:
+      - ENV=production
+      - DATA_DIR=/app/data
+      - MODEL_CACHE_DIR=/app/models
+      - LOG_FORMAT=json
     volumes:
       - api_data:/app/data
+    restart: unless-stopped
 
   web:
     build:
       context: ./apps/web
-    ports:
-      - "3000:3000"
+      args:
+        NEXT_PUBLIC_API_BASE_URL: /api/
     environment:
-      - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/
+      # Server-side health probe talks to the API directly on the network.
+      - API_INTERNAL_URL=http://api:8000/
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      # Override if 80/443 are taken locally: HTTP_PORT=8080 HTTPS_PORT=8443
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   api_data:
