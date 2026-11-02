@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (gitignored) and adjust. Do NOT put llm_api_key
+# here; export it instead so it never touches disk:
+#   export TF_VAR_llm_api_key="gsk_..."
+
+image_tag = "dev"
+
+# llm_model  = "openai/gpt-oss-120b"
+# http_port  = 80
+# https_port = 443
+# docker_host = "unix:///var/run/docker.sock"

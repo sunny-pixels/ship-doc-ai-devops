@@ -25,3 +25,11 @@ data/
 
 # TLS material (generate with scripts/gen-certs.sh)
 nginx/certs/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
