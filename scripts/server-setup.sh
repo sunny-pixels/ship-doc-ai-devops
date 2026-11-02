@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time (re-runnable) setup of a fresh Ubuntu Server 24.04 host for UltraDoc AI.
+# One-time (re-runnable) setup of a fresh Ubuntu Server 24.04/26.04 host for UltraDoc AI.
 #
 # Usage (as root, or with sudo, from the account you SSH in with):
 #   sudo DEPLOY_USER=deploy scripts/server-setup.sh
@@ -30,22 +30,26 @@ export DEBIAN_FRONTEND=noninteractive
 step() { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+# apt-get with stdin detached, so it never reads from or reconfigures the
+# terminal. Seen once on Ubuntu 26.04 (sudo-rs): an interactive
+# `sudo server-setup.sh | tee log` left apt-get stopped (state T) indefinitely.
+apt_get() { apt-get "$@" </dev/null; }
 
 # ---- Preflight ---------------------------------------------------------------
 
 [[ $EUID -eq 0 ]] || die "run as root (sudo $0)"
 # shellcheck source=/dev/null
 . /etc/os-release
-[[ "$ID" == "ubuntu" && "$VERSION_ID" == "24.04" ]] \
-  || info "warning: tested on Ubuntu 24.04, this is $PRETTY_NAME"
+[[ "$ID" == "ubuntu" && ( "$VERSION_ID" == "24.04" || "$VERSION_ID" == "26.04" ) ]] \
+  || info "warning: tested on Ubuntu 24.04 and 26.04, this is $PRETTY_NAME"
 
 ARCH="$(dpkg --print-architecture)"   # amd64 / arm64
 
 # ---- 1. Base packages + unattended upgrades ----------------------------------
 
 step "Installing base packages"
-apt-get update -q
-apt-get install -y -q \
+apt_get update -q
+apt_get install -y -q \
   ca-certificates curl gnupg lsb-release git jq unzip \
   ufw fail2ban python3-systemd \
   unattended-upgrades apt-listchanges logrotate cron
@@ -166,8 +170,8 @@ if ! command -v docker >/dev/null 2>&1; then
   chmod a+r /etc/apt/keyrings/docker.asc
   echo "deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" \
     >/etc/apt/sources.list.d/docker.list
-  apt-get update -q
-  apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apt_get update -q
+  apt_get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 else
   info "already installed: $(docker --version)"
 fi
@@ -193,8 +197,8 @@ if ! command -v terraform >/dev/null 2>&1; then
     | gpg --dearmor --yes -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
   echo "deb [arch=$ARCH signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $VERSION_CODENAME main" \
     >/etc/apt/sources.list.d/hashicorp.list
-  apt-get update -q
-  apt-get install -y -q terraform
+  apt_get update -q
+  apt_get install -y -q terraform
 else
   info "already installed: $(terraform version | head -n1)"
 fi

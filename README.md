@@ -201,7 +201,7 @@ yourself:
 ## DevOps Setup
 
 A self-hosted deployment of the same app, built for running on a single
-Ubuntu Server 24.04 VM (VirtualBox). Everything is free and local: Docker for
+Ubuntu Server 24.04/26.04 VM (VMware Workstation or VirtualBox). Everything is free and local: Docker for
 runtime, Terraform for infrastructure, LocalStack in place of AWS, and GitHub
 Actions with a self-hosted runner for CI/CD. The Vercel/Render setup above is
 unchanged.
@@ -216,7 +216,7 @@ flowchart LR
 
     Browser -->|HTTPS :443| Nginx
 
-    subgraph VM["Ubuntu 24.04 VM (VirtualBox) · UFW 22/80/443 · fail2ban"]
+    subgraph VM["Ubuntu 26.04 VM (VMware/VirtualBox) · UFW 22/80/443 · fail2ban"]
         Runner["GitHub self-hosted runner<br/>docker build :sha<br/>terraform apply"]
         Cron["cron<br/>backup.sh daily<br/>healthcheck.sh every 5 min"]
 
@@ -279,10 +279,10 @@ docker compose up --build            # https://localhost (accept the self-signed
 ### Bring it up on a fresh VM
 
 **On your PC:**
-1. Create a VirtualBox VM:
-   - Ubuntu Server 24.04 ISO, 2 vCPU, 4–6 GB RAM, 30 GB disk.
-   - Network: Bridged Adapter (or NAT with port forwards 2222→22, 443→443).
-   - In the installer, tick **Install OpenSSH server**.
+1. Create a VM (VMware Workstation or VirtualBox; tested on VMware Workstation 17 + Ubuntu 26.04.1):
+   - Ubuntu Server 24.04 or 26.04 LTS ISO, 2–4 vCPU, 6 GB RAM, 40 GB disk (store it on a drive with space).
+   - Network: NAT (VMware: the PC reaches the VM IP directly) or Bridged. VirtualBox NAT needs port forwards 2222→22, 443→443.
+   - In the installer: untick "LVM group" (else only half the disk is used), tick **Install OpenSSH server**, pick no snaps (not docker).
 2. Copy your SSH key to the VM (PowerShell):
    ```powershell
    ssh-keygen -t ed25519            # once, if you have no key yet

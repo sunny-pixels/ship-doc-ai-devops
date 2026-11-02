@@ -1,6 +1,6 @@
 # UltraDoc AI runbook
 
-Operational procedures for the self-hosted deployment (Ubuntu 24.04 VM,
+Operational procedures for the self-hosted deployment (Ubuntu 24.04/26.04 VM,
 Docker managed by Terraform, nginx in front). Commands run on the VM as the
 `deploy` user unless marked `sudo`.
 
