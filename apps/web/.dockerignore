@@ -1,0 +1,12 @@
+# Secrets: NEXT_PUBLIC_API_BASE_URL comes from the build arg, not a baked .env
+.env
+.env.*
+
+# Local build output / deps (rebuilt inside the image)
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+Dockerfile
+.dockerignore

@@ -106,6 +106,16 @@ def _query_sync(
     return hits
 
 
+def _ping_sync() -> None:
+    _get_client().heartbeat()
+    _get_collection_sync()
+
+
+async def ping() -> None:
+    """Raise if the vector store can't be opened — used by the readiness probe."""
+    await asyncio.to_thread(_ping_sync)
+
+
 def _delete_sync(document_id: str) -> None:
     collection = _get_collection_sync()
     collection.delete(where={"document_id": document_id})

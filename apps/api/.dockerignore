@@ -1,0 +1,17 @@
+# Secrets and local state never go into the image
+.env
+.env.*
+!.env.example
+data/
+
+# Local tooling / caches
+.venv/
+**/__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+tests/
+
+Dockerfile
+.dockerignore

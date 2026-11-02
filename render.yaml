@@ -22,7 +22,7 @@ services:
       - key: RERANKER_MODEL
         value: Xenova/ms-marco-MiniLM-L-6-v2
       - key: MODEL_CACHE_DIR
-        value: /app/data/models
+        value: /app/models
       - key: DATA_DIR
         value: /app/data
       - key: MAX_UPLOAD_MB
