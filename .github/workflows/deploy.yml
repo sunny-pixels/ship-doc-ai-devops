@@ -1,0 +1,129 @@
+# Continuous deployment to the VM: on every push to main, the self-hosted
+# runner on the VM builds images tagged with the commit SHA, applies
+# terraform/docker, health-checks through nginx, and rolls back to the
+# previously deployed tag if anything fails.
+#
+# Secrets: LLM_API_KEY (repository secret). Optional repository variable:
+# LLM_MODEL. Nothing secret is stored in this file or in the images.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two deploys at once; queue instead of cancelling a deploy midway.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  STATE_DIR: /opt/ultradoc/state
+  APP_URL: https://127.0.0.1
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+  TF_VAR_cert_dir: /opt/ultradoc/certs
+  TF_VAR_llm_model: ${{ vars.LLM_MODEL || 'openai/gpt-oss-120b' }}
+
+jobs:
+  deploy:
+    name: Deploy to VM
+    runs-on: [self-hosted, linux, ultradoc]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Read previously deployed tag
+        id: prev
+        run: |
+          tag="$(cat "$STATE_DIR/current_tag" 2>/dev/null || true)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Previously deployed: ${tag:-<none, first deploy>}"
+
+      - name: Build images (${{ github.sha }})
+        run: |
+          docker build -t "ultradoc-api:$GITHUB_SHA" apps/api
+          docker build -t "ultradoc-web:$GITHUB_SHA" \
+            --build-arg NEXT_PUBLIC_API_BASE_URL=/api/ apps/web
+
+      - name: Terraform init
+        working-directory: terraform/docker
+        run: terraform init -backend-config="path=$STATE_DIR/docker.tfstate"
+
+      - name: Terraform apply
+        id: apply
+        working-directory: terraform/docker
+        env:
+          TF_VAR_llm_api_key: ${{ secrets.LLM_API_KEY }}
+        run: terraform apply -auto-approve -var "image_tag=$GITHUB_SHA"
+
+      - name: Health check (/api/health + /api/ready)
+        id: health
+        run: |
+          for attempt in $(seq 1 10); do
+            if curl -fsk --max-time 5 "$APP_URL/api/health" >/dev/null \
+              && curl -fsk --max-time 5 "$APP_URL/api/ready" >/dev/null; then
+              echo "Healthy on attempt $attempt"
+              exit 0
+            fi
+            echo "Attempt $attempt/10 failed; retrying in 6s"
+            sleep 6
+          done
+          echo "::error::App did not become healthy after deploy"
+          docker ps -a --filter name=ultradoc- --format 'table {{.Names}}\t{{.Status}}'
+          docker logs --tail 50 ultradoc-api || true
+          exit 1
+
+      - name: Record deployed tag
+        env:
+          PREV_TAG: ${{ steps.prev.outputs.tag }}
+        run: |
+          echo "$PREV_TAG" > "$STATE_DIR/previous_tag"
+          echo "$GITHUB_SHA" > "$STATE_DIR/current_tag"
+
+      - name: Install ops scripts for cron
+        # backup.sh / healthcheck.sh run from cron out of /opt/ultradoc/app.
+        run: |
+          rm -rf /opt/ultradoc/app/scripts
+          cp -a scripts /opt/ultradoc/app/scripts
+
+      - name: Prune old images (keep current + previous)
+        env:
+          PREV_TAG: ${{ steps.prev.outputs.tag }}
+        run: |
+          keep="$GITHUB_SHA $PREV_TAG"
+          for repo in ultradoc-api ultradoc-web; do
+            docker images "$repo" --format '{{.Tag}}' | while read -r tag; do
+              case " $keep " in
+                *" $tag "*) ;;
+                *) docker rmi "$repo:$tag" || true ;;
+              esac
+            done
+          done
+          docker image prune -f
+          docker builder prune -f --filter until=168h
+
+      - name: Roll back to ${{ steps.prev.outputs.tag || 'previous tag' }}
+        if: >-
+          failure()
+          && steps.prev.outputs.tag != ''
+          && (steps.apply.outcome == 'failure' || steps.health.outcome == 'failure')
+        working-directory: terraform/docker
+        env:
+          TF_VAR_llm_api_key: ${{ secrets.LLM_API_KEY }}
+          PREV_TAG: ${{ steps.prev.outputs.tag }}
+        run: |
+          echo "::warning::Deploy of $GITHUB_SHA failed; rolling back to $PREV_TAG"
+          terraform apply -auto-approve -var "image_tag=$PREV_TAG"
+          for _ in $(seq 1 10); do
+            if curl -fsk --max-time 5 "$APP_URL/api/ready" >/dev/null; then
+              echo "Rollback to $PREV_TAG is healthy"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::Rollback to $PREV_TAG is NOT healthy, manual action needed (see docs/RUNBOOK.md)"
+          exit 1

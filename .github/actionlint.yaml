@@ -1,0 +1,4 @@
+# actionlint config: declare the custom label of the self-hosted VM runner.
+self-hosted-runner:
+  labels:
+    - ultradoc

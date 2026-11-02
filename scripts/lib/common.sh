@@ -27,7 +27,7 @@ unset _caller_env
 : "${NGINX_CONTAINER:=${NAME_PREFIX}-nginx}"
 : "${BACKUP_DIR:=$ULTRADOC_HOME/backups}"
 : "${LOG_DIR:=$ULTRADOC_HOME/logs}"
-: "${APP_URL:=https://localhost}"
+: "${APP_URL:=https://127.0.0.1}"
 : "${S3_ENDPOINT:=http://127.0.0.1:4566}"
 : "${S3_BUCKET:=ultradoc-backups}"
 : "${S3_PREFIX:=backups/}"

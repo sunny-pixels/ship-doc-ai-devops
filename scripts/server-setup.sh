@@ -236,7 +236,7 @@ sysctl -q --system
 # ---- 9. App directories -------------------------------------------------------
 
 step "Creating $ULTRADOC_HOME layout"
-#   app/      git clone of this repo (scripts for cron live here)
+#   app/      ops scripts for cron (installed by the deploy workflow)
 #   certs/    TLS cert + key for nginx
 #   state/    Terraform state + deployed image tags (contains secrets: 700)
 #   backups/  local backup archives
@@ -263,6 +263,7 @@ step "Done"
 cat <<EOF
     Next steps (as $DEPLOY_USER; log out and back in so the docker group applies):
       ssh $DEPLOY_USER@<vm-ip>
-      git clone <your-repo-url> $ULTRADOC_HOME/app
-    Then follow "Bring it up on the VM" in README.md.
+      git clone <your-repo-url> ~/ultradoc-ai
+    Then follow "Bring it up on the VM" in README.md. (The deploy workflow
+    installs scripts/ into $ULTRADOC_HOME/app for cron.)
 EOF
