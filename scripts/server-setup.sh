@@ -268,6 +268,6 @@ cat <<EOF
     Next steps (as $DEPLOY_USER; log out and back in so the docker group applies):
       ssh $DEPLOY_USER@<vm-ip>
       git clone <your-repo-url> ~/ultradoc-ai
-    Then follow "Bring it up on the VM" in README.md. (The deploy workflow
+    Then follow "Bring it up on a fresh VM" in README.md. (The deploy workflow
     installs scripts/ into $ULTRADOC_HOME/app for cron.)
 EOF
